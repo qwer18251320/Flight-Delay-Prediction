@@ -1,0 +1,386 @@
+---
+title: "288 Project_Decision Tree"
+author: "Kathy Yu Hsin Lee"
+date: "6/5/2021"
+output: html_document
+---
+**Packages **
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(readxl)
+library(zoo)
+library(lubridate)
+library(stringr)
+library(fpp2)
+library(leaps)
+library(tree)
+```
+
+## Data Cleaning ##
+**Data Cleaing**
+```{r}
+# Clean Data
+setwd("/Users/KathyLee/UCI MSBA/Course Material/05 Spring Quarter/BANA288 Predictive Analytics/Project")
+dat <- read.csv("12-2019.csv") # import august flight
+
+# Delete unused columns, remove national and security
+flight <- dat[-c(2,5,7:9,12,13,15,16,17,22:24,30)]
+
+# transform delay reason into binary variables
+flight$delay_carrier <- ifelse(flight$delay_carrier>15, 1, 0)
+flight$delay_weather <- ifelse(flight$delay_weather>15, 1, 0)
+flight$delay_late_aircarft_arrival <- ifelse(flight$delay_late_aircarft_arrival>15, 1, 0)
+
+# change schedule departure and arrival dt to numeric
+dp_time <- strftime(flight$scheduled_departure_dt, format="%H:%M")
+ar_time <- strftime(flight$scheduled_arrival_dt, format="%H:%M")
+flight$scheduled_departure_dt <- as.numeric(sub("^(\\d+):(\\d+).*", "\\1.\\2", dp_time))
+flight$scheduled_arrival_dt <- as.numeric(sub("^(\\d+):(\\d+).*", "\\1.\\2", ar_time))
+
+```
+
+**Select Only Top 30 Airport Data **
+```{r}
+# choose top 30 airports
+top <- c('MDW','BNA','PDX','TPA','IAD','SAN','MIA','BWI','FLL','SLC',  
+         'JFK','DCA','BOS','PHL','MSP','MCO','EWR','LAS','LGA','SFO',
+         'DTW','IAH','PHX','SEA','LAX','CLT','DEN','DFW','ATL','ORD')
+
+top30 <- flight %>% filter(origin_airport %in% top & destination_airport %in% top)
+
+# remove na
+top30 <- na.omit(top30)
+
+table(top30$delay_weather)
+table(top30$delay_carrier)
+table(top30$delay_late_aircarft_arrival)
+```
+
+# Decision Tree #
+
+```{r}
+library(rpart)
+library(rpart.plot)
+library(rattle)
+```
+
+## Carrier Delay##
+**Data Preparation**
+```{r}
+# subset delay and ontime for carrier delay
+delay <- top30 %>% filter(delay_carrier==1)
+ontime <- top30 %>% filter(delay_carrier==0)
+
+set.seed(123456)
+
+train.delay <- sample(nrow(delay),5000)
+train.ontime <- sample(nrow(ontime),5000)
+train1 <- rbind(delay[train.delay,], ontime[train.ontime,])
+
+test.delay <- sample(nrow(delay[-train.delay]), 1250)
+test.ontime <- sample(nrow(ontime[-train.ontime]), 1250)
+test1 <- rbind(delay[test.delay,], ontime[test.ontime,])
+
+# Prepare Data for decision tree
+#  Set up the Y variable as a factor 
+train1$delay_carrier <- as.factor(train1$delay_carrier)
+test1$delay_carrier <- as.factor(test1$delay_carrier)
+
+#  Set up indicators for all the factors
+train1$carrier_code <- as.factor(train1$carrier_code)
+train1$origin_airport <- as.factor(train1$origin_airport)
+train1$destination_airport <- as.factor(train1$destination_airport)
+train1$day <- as.factor(train1$day)
+train1$weekday <- as.factor(train1$weekday)
+
+test1$carrier_code <- as.factor(test1$carrier_code)
+test1$origin_airport <- as.factor(test1$origin_airport)
+test1$destination_airport <- as.factor(test1$destination_airport)
+test1$day <- as.factor(test1$day)
+test1$weekday <- as.factor(test1$weekday)
+
+# Remove other delay column
+train1 <- train1[-c(6,7)]
+test1 <- test1[-c(6,7)]
+```
+
+**Build a tree**
+```{r}
+#  Build a tree on the training data
+tree.train <- rpart(delay_carrier ~ ., data = train1, method='class')
+summary(tree.train)
+
+# Plot the tree
+fancyRpartPlot(tree.train, main = "Classification Tree on Carrier Delay", caption = NULL)
+rpart.plot(tree.train, extra = 2)
+
+```
+
+**Important Variables**
+```{r}
+tree.train$variable.importance
+printcp(tree.train)
+```
+
+**Check performance on train1 and test1**
+```{r}
+#  Predict on train1
+tree.train.pred <- predict(tree.train, train1)
+tree.train.pred.cl <- 
+  ifelse(tree.train.pred[,2] > 0.5, 1, 0)
+tab.train <- table(train1$delay_carrier, tree.train.pred.cl, dnn = c("Actual", "Predicted"))
+tab.train
+mean(train1$delay_carrier != tree.train.pred.cl)
+
+# Predict on test1
+tree.test.pred <- predict(tree.train, test1)
+tree.test.pred[1:10,]
+tree.test.pred.cl <- ifelse(tree.test.pred[,2] > 0.5, 1, 0)
+tab.test <- table(test1$delay_carrier, tree.test.pred.cl, dnn = c("Actual", "Predicted"))
+tab.test
+err.tree.test <- mean(test1$delay_carrier != tree.test.pred.cl)
+err.tree.test
+```
+
+
+## Late Aircraft Delay ##
+**Data Preparation**
+```{r}
+# subset delay and ontime for late aircraft delay
+delay <- top30 %>% filter(delay_late_aircarft_arrival==1)
+ontime <- top30 %>% filter(delay_late_aircarft_arrival==0)
+
+set.seed(123456)
+
+train.delay <- sample(nrow(delay),5000)
+train.ontime <- sample(nrow(ontime),5000)
+train2 <- rbind(delay[train.delay,], ontime[train.ontime,])
+
+test.delay <- sample(nrow(delay[-train.delay]), 1250)
+test.ontime <- sample(nrow(ontime[-train.ontime]), 1250)
+test2 <- rbind(delay[test.delay,], ontime[test.ontime,])
+
+# Prepare Data for decision tree
+#  Set up the Y variable as a factor 
+train2$delay_late_aircarft_arrival <- as.factor(train2$delay_late_aircarft_arrival)
+test2$delay_late_aircarft_arrival <- as.factor(test2$delay_late_aircarft_arrival)
+
+#  Set up indicators for all the factors
+train2$carrier_code <- as.factor(train2$carrier_code)
+train2$origin_airport <- as.factor(train2$origin_airport)
+train2$destination_airport <- as.factor(train2$destination_airport)
+train2$day <- as.factor(train2$day)
+train2$weekday <- as.factor(train2$weekday)
+
+test2$carrier_code <- as.factor(test2$carrier_code)
+test2$origin_airport <- as.factor(test2$origin_airport)
+test2$destination_airport <- as.factor(test2$destination_airport)
+test2$day <- as.factor(test2$day)
+test2$weekday <- as.factor(test2$weekday)
+
+# Remove other delay column
+train2 <- train2[-c(5,6)]
+test2 <- test2[-c(5,6)]
+```
+
+**Build a tree**
+```{r}
+#  Build a tree on the training data
+tree.train2 <- rpart(delay_late_aircarft_arrival ~ ., data = train2, method='class')
+summary(tree.train2)
+
+# Plot the tree
+fancyRpartPlot(tree.train2, caption = NULL, main = "Classification Tree on Late Aircraft Delay")
+#rpart.plot(tree.train2)
+
+```
+
+**Important Variables**
+```{r}
+tree.train2$variable.importance
+printcp(tree.train2)
+```
+
+**Check performance on train2 and test2**
+```{r}
+#  Predict on train2
+tree.train.pred2 <- predict(tree.train2, train2)
+tree.train.pred.c2 <- 
+  ifelse(tree.train.pred2[,2] > 0.5, 1, 0)
+tab.train2 <- table(train2$delay_late_aircarft_arrival, tree.train.pred.c2, dnn = c("Actual", "Predicted"))
+tab.train2
+mean(train2$delay_late_aircarft_arrival != tree.train.pred.c2)
+
+# Predict on test2
+tree.test.pred2 <- predict(tree.train2, test2)
+tree.test.pred2[1:10,]
+tree.test.pred.c2 <- ifelse(tree.test.pred2[,2] > 0.5, 1, 0)
+tab.test2 <- table(test2$delay_late_aircarft_arrival, tree.test.pred.c2, dnn = c("Actual", "Predicted"))
+tab.test2
+err.tree.test2 <- mean(test2$delay_late_aircarft_arrival != tree.test.pred.c2)
+err.tree.test2
+```
+
+
+## Weather Delay ##
+**Data Preparation**
+```{r}
+# subset delay and ontime for weather delay
+delay <- top30 %>% filter(delay_weather==1)
+ontime <- top30 %>% filter(delay_weather==0)
+
+set.seed(123456)
+
+train.delay <- sample(nrow(delay),914)
+train.ontime <- sample(nrow(ontime),914)
+train3 <- rbind(delay[train.delay,], ontime[train.ontime,])
+
+test.delay <- sample(nrow(delay[-train.delay]), 229)
+test.ontime <- sample(nrow(ontime[-train.ontime]), 229)
+test3 <- rbind(delay[test.delay,], ontime[test.ontime,])
+
+# Prepare Data for decision tree
+#  Set up the Y variable as a factor 
+train3$delay_weather <- as.factor(train3$delay_weather)
+test3$delay_weather <- as.factor(test3$delay_weather)
+
+#  Set up indicators for all the factors
+train3$carrier_code <- as.factor(train3$carrier_code)
+train3$origin_airport <- as.factor(train3$origin_airport)
+train3$destination_airport <- as.factor(train3$destination_airport)
+train3$day <- as.factor(train3$day)
+train3$weekday <- as.factor(train3$weekday)
+
+test3$carrier_code <- as.factor(test3$carrier_code)
+test3$origin_airport <- as.factor(test3$origin_airport)
+test3$destination_airport <- as.factor(test3$destination_airport)
+test3$day <- as.factor(test3$day)
+test3$weekday <- as.factor(test3$weekday)
+
+# Remove other delay column
+train3 <- train3[-c(5,7)]
+test3 <- test3[-c(5,7)]
+```
+
+**Build a tree**
+```{r}
+#  Build a tree on the training data
+tree.train3 <- rpart(delay_weather ~ ., data = train3, method='class')
+summary(tree.train3)
+
+# Plot the tree
+fancyRpartPlot(tree.train3, caption = NULL, main = "Classification Tree on Weather Delay")
+#rpart.plot(tree.train3)
+
+```
+
+**Important Variables**
+```{r}
+tree.train3$variable.importance
+printcp(tree.train3)
+```
+
+**Check performance on train3 and test3**
+```{r}
+#  Predict on train3
+tree.train.pred3 <- predict(tree.train3, train3)
+tree.train.pred.c3 <- 
+  ifelse(tree.train.pred3[,2] > 0.5, 1, 0)
+tab.train3 <- table(train3$delay_weather, tree.train.pred.c3, dnn = c("Actual", "Predicted"))
+tab.train3
+mean(train3$delay_weather != tree.train.pred.c3)
+
+# Predict on test3
+tree.test.pred3 <- predict(tree.train3, test3)
+tree.test.pred3[1:10,]
+tree.test.pred.c3 <- ifelse(tree.test.pred3[,2] > 0.5, 1, 0)
+tab.test3 <- table(test3$delay_weather, tree.test.pred.c3, dnn = c("Actual", "Predicted"))
+tab.test3
+err.tree.test3 <- mean(test3$delay_weather != tree.test.pred.c3)
+err.tree.test3
+```
+
+
+## Boosting ##
+```{r}
+library(gbm)
+```
+
+**Change the Y variable back to quantitative 0/1**
+```{r}
+train1$delay_carrier <- as.numeric(train1$delay_carrier) - 1
+test1$delay_carrier <- as.numeric(test1$delay_carrier) - 1
+
+train2$delay_late_aircarft_arrival <- as.numeric(train2$delay_late_aircarft_arrival) - 1
+test2$delay_late_aircarft_arrival <- as.numeric(test2$delay_late_aircarft_arrival) - 1
+
+train3$delay_weather <- as.numeric(train3$delay_weather) - 1
+test3$delay_weather <- as.numeric(test3$delay_weather) - 1
+```
+
+**Carrier Delay**
+```{r}
+# Carrier Delay
+boost.train <- gbm(delay_carrier ~ ., data = train1, 
+                   distribution = "bernoulli", n.trees = 10000, 
+                   interaction.depth = 7, shrinkage = 0.005)
+summary(boost.train)
+
+#  Top 10 variables 
+summary(boost.train)[1:10,]
+
+# Carrier Delay Prediction
+yhat.boost <- predict(boost.train, test1, n.trees= 10000, type = "response")
+yhat.boost
+yhat.boost.cl <- ifelse(yhat.boost > 0.5, 1, 0)
+tab.boost <- table(test1$delay_carrier, yhat.boost.cl)
+tab.boost
+err.boost <- mean(test1$delay_carrier != yhat.boost.cl)
+err.boost
+```
+
+**Late Aircraft Arrival Delay **
+```{r}
+# Late Aircraft Arrival Delay
+boost.train2 <- gbm(delay_late_aircarft_arrival ~ ., data = train2, 
+                   distribution = "bernoulli", n.trees = 10000, 
+                   interaction.depth = 7, shrinkage = 0.005)
+summary(boost.train2)
+
+#  Top 10 variables 
+summary(boost.train2)[1:10,]
+
+# Late Aircraft Arrival Delay Prediction
+yhat.boost2 <- predict(boost.train2, test2, n.trees= 10000, type = "response")
+yhat.boost2
+yhat.boost.c2 <- ifelse(yhat.boost2 > 0.5, 1, 0)
+tab.boost2 <- table(test2$delay_late_aircarft_arrival, yhat.boost.c2)
+tab.boost2
+err.boost2 <- mean(test2$delay_late_aircarft_arrival != yhat.boost.c2)
+err.boost2
+
+```
+
+**Weather Delay**
+```{r}
+# Weather Delay
+boost.train3 <- gbm(delay_weather ~ ., data = train3, 
+                   distribution = "bernoulli", n.trees = 10000, 
+                   interaction.depth = 7, shrinkage = 0.005)
+summary(boost.train3)
+
+#  Top 10 variables
+summary(boost.train3)[1:10,]
+
+# Weather Delay Prdiction
+yhat.boost3 <- predict(boost.train3, test3, n.trees= 10000, type = "response")
+yhat.boost3
+yhat.boost.c3 <- ifelse(yhat.boost3 > 0.5, 1, 0)
+tab.boost3 <- table(test3$delay_weather, yhat.boost.c3)
+tab.boost3
+err.boost3 <- mean(test3$delay_weather != yhat.boost.c3)
+err.boost3
+```
+
